@@ -60,30 +60,28 @@ class _InboxScreenState extends State<InboxScreen>
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('token') ?? widget.jwtToken;
       
-      if (token != null) {
-        try {
-          final response = await http.post(
-            Uri.parse('http://localhost:4000/messages/mark-read'),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            },
-            body: jsonEncode({
-              'user1': widget.currentUser,
-              'user2': otherUser,
-            }),
-          );
+      try {
+        final response = await http.post(
+          Uri.parse('http://localhost:4000/messages/mark-read'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode({
+            'user1': widget.currentUser,
+            'user2': otherUser,
+          }),
+        );
 
-          // Always refresh from server to ensure consistency
-          if (mounted) {
-            _fetchConversations();
-          }
-        } catch (e) {
-          print('Error marking messages as read: $e');
-          // If API call fails, still keep the local state updated
+        // Always refresh from server to ensure consistency
+        if (mounted) {
+          _fetchConversations();
         }
+      } catch (e) {
+        print('Error marking messages as read: $e');
+        // If API call fails, still keep the local state updated
       }
-    } catch (e) {
+        } catch (e) {
       print('❌ Error in _markConversationAsRead: $e');
       // If anything fails, force a refresh
       if (mounted) {
@@ -727,6 +725,7 @@ class _InboxScreenState extends State<InboxScreen>
         const PopupMenuDivider(),
         PopupMenuItem<String>(
           value: 'logout',
+          onTap: _handleLogout,
           child: const Row(
             children: [
               Icon(Icons.logout, size: 20, color: Colors.red),
@@ -734,7 +733,6 @@ class _InboxScreenState extends State<InboxScreen>
               Text('Logout', style: TextStyle(color: Colors.red)),
             ],
           ),
-          onTap: _handleLogout,
         ),
       ],
     );

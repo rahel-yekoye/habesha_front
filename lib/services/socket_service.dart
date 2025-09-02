@@ -4,6 +4,7 @@ import '../models/message.dart' as models;
 import '../main.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'call_manager.dart';
 
 class SocketService {
   static final SocketService _instance = SocketService._internal();
@@ -14,8 +15,11 @@ class SocketService {
   String? _jwtToken;
   String? _selfId;
   Timer? _heartbeatTimer;
-  int _reconnectAttempts = 0;
+  final int _reconnectAttempts = 0;
   final String _baseUrl = 'http://localhost:4000';
+  
+  // Store CallManager instances per user ID
+  final Map<String, CallManager> _callManagers = {};
 
   IO.Socket get socket {
     if (_socket == null) {
@@ -144,13 +148,8 @@ class SocketService {
     }
 
     if (!_socket!.connected) {
-      print('Socket not connected, attempting to reconnect...');
-      try {
-        await connect(userId: _selfId!);
-      } catch (e) {
-        print('Failed to reconnect socket: $e');
-        return;
-      }
+      print('Socket not connected, skipping message edit');
+      return;
     }
 
     print('Editing message: messageId=$messageId, newContent=$newContent');
@@ -175,15 +174,10 @@ class SocketService {
       return;
     }
 
-    // If socket is not connected, try to reconnect
+    // If socket is not connected, skip sending
     if (!_socket!.connected) {
-      print('Socket not connected, attempting to reconnect...');
-      try {
-        await connect(userId: _selfId!);
-      } catch (e) {
-        print('Failed to reconnect socket: $e');
-        return;
-      }
+      print('Socket not connected, skipping reaction send');
+      return;
     }
 
     print('Sending reaction: messageId=$messageId, userId=$_selfId, emoji=$emoji');
@@ -273,6 +267,9 @@ class SocketService {
       return;
     }
 
+    print('[SOCKET] ===== CONNECTING TO SOCKET =====');
+    print('[SOCKET] Attempting to connect for user: $userId');
+    print('[SOCKET] Previous user ID: $_selfId');
     print('🔌 Establishing new socket connection for user: $userId');
     
     // Properly disconnect and dispose the old socket if it exists
@@ -284,6 +281,7 @@ class SocketService {
     
     // Set the user ID immediately
     _selfId = userId;
+    print('[SOCKET] Set _selfId to: $_selfId');
     resetListeners();
 
     // Prepare connection options
@@ -306,13 +304,14 @@ class SocketService {
     }
 
     // Configure socket options for better reliability
-    options['transports'] = ['websocket', 'polling'];
+    options['transports'] = ['websocket'];
     options['autoConnect'] = true;
     options['reconnection'] = true;
     options['reconnectionAttempts'] = 5;
     options['reconnectionDelay'] = 1000;
     options['reconnectionDelayMax'] = 5000;
     options['timeout'] = 10000;
+    options['forceNew'] = false;
 
     // Create new socket instance with proper URL handling
     final serverUrl = _baseUrl.replaceAll(RegExp(r'^https?://'), '');
@@ -343,8 +342,7 @@ class SocketService {
       }
       
       print('⚠️ Connection attempt $connectionAttempts of $maxAttempts...');
-      _socket?.disconnect();
-      _socket?.connect();
+      // Don't manually disconnect/reconnect - let socket handle it automatically
     }
     
     // Set up connection timer
@@ -366,22 +364,7 @@ class SocketService {
       connectionTimer?.cancel();
     }
     
-    // Handle successful connection
-    _socket!.onConnect((_) {
-      if (!completer.isCompleted) {
-        print('✅ Connected to socket server. Socket ID: ${_socket!.id}');
-        cleanup();
-        completer.complete();
-        
-        // Register user with the server
-        if (_selfId != null) {
-          print('[SOCKET] Registering user: $_selfId');
-          _socket!.emit('register_user', _selfId);
-          _socket!.emit('join', _selfId);
-          _startHeartbeat();
-        }
-      }
-    });
+    // Handle successful connection - REMOVED DUPLICATE HANDLER
     
     // Handle connection errors
     _socket!.onConnectError((error) {
@@ -393,10 +376,16 @@ class SocketService {
     });
     
     // Set up other socket event handlers
-    _socket!.onDisconnect((_) => print('ℹ️ Socket disconnected'));
+    _socket!.onDisconnect((reason) {
+      print('ℹ️ Socket disconnected. Reason: $reason');
+      _stopHeartbeat();
+    });
     _socket!.onError((error) => print('❌ Socket error: $error'));
-    _socket!.onReconnect((_) => print('🔄 Socket reconnecting...'));
-    _socket!.onReconnectAttempt((_) => print('🔄 Attempting to reconnect...'));
+    _socket!.onReconnect((_) {
+      print('🔄 Socket reconnected!');
+      _startHeartbeat();
+    });
+    _socket!.onReconnectAttempt((attempt) => print('🔄 Reconnection attempt: $attempt'));
     _socket!.onReconnectError((error) => print('❌ Reconnection error: $error'));
     
     // Start the initial connection attempt and timer
@@ -414,7 +403,10 @@ class SocketService {
 
         // Register user with the server
         print('[SOCKET] Registering user: $_selfId');
-        _socket!.emit('register_user', _selfId);
+        _socket!.emit('register_user', {
+          'userId': _selfId,
+          'username': _selfId, // For now, use same value for both
+        });
         
         // Join presence channel
         _socket!.emit('join', _selfId);
@@ -422,18 +414,19 @@ class SocketService {
         
         // Start presence heartbeat
         _startHeartbeat();
+        print('[SOCKET] Started heartbeat for user: $_selfId');
         
         // Initialize CallManager if context is available
         if (navigatorKey.currentContext != null) {
           print('[SOCKET] Initializing CallManager for user: $_selfId');
-          globalCallManager.initialize(_socket!, navigatorKey.currentContext!, _selfId!);
+          _getOrCreateCallManager(_selfId!).initialize(_socket!, navigatorKey.currentContext!, _selfId!);
         } else {
           print('⚠️ [SOCKET] Navigator context not available, will retry CallManager initialization');
           // Schedule a retry for CallManager initialization
           Future.delayed(Duration(seconds: 2), () {
             if (navigatorKey.currentContext != null) {
               print('[SOCKET] Retrying CallManager initialization');
-              globalCallManager.initialize(_socket!, navigatorKey.currentContext!, _selfId!);
+              _getOrCreateCallManager(_selfId!).initialize(_socket!, navigatorKey.currentContext!, _selfId!);
             }
           });
         }
@@ -455,16 +448,8 @@ class SocketService {
       print('🔌 Disconnected from socket server. Reason: $reason');
       _stopHeartbeat();
       
-      // Attempt to reconnect if this was an unexpected disconnect
-      if (reason != 'io client disconnect') {
-        print('🔄 Attempting to reconnect in 3 seconds...');
-        Future.delayed(Duration(seconds: 3), () {
-          if (_socket != null && !_socket!.connected) {
-            print('🔄 Starting reconnection attempt...');
-            _socket!.connect();
-          }
-        });
-      }
+      // Let socket handle reconnection automatically
+      print('🔄 Socket will attempt automatic reconnection...');
     });
 
     _socket!.onConnectError((error) {
@@ -474,17 +459,8 @@ class SocketService {
         completer.completeError(errorMsg);
       }
       
-      // Attempt reconnection with exponential backoff
-      if (_socket != null && !_socket!.connected) {
-        final delay = Duration(seconds: _reconnectAttempts < 5 ? 2 : 5);
-        print('⏳ Will attempt to reconnect in ${delay.inSeconds}s (attempt ${_reconnectAttempts + 1})');
-        Future.delayed(delay, () {
-          _reconnectAttempts++;
-          if (_socket != null && !_socket!.connected) {
-            _socket!.connect();
-          }
-        });
-      }
+      // Let socket handle reconnection automatically
+      print('🔄 Socket will attempt automatic reconnection...');
     });
     
     // Handle reconnection events
@@ -683,6 +659,7 @@ class SocketService {
   void onPresenceUpdate(void Function(Map<String, dynamic>) handler) {
     _socket?.off('presence_update');
     _socket?.on('presence_update', (data) {
+      print('[SOCKET] Received presence_update: $data');
       if (data is Map) handler(Map<String, dynamic>.from(data));
     });
   }
@@ -729,15 +706,51 @@ class SocketService {
   void _startHeartbeat() {
     _heartbeatTimer?.cancel();
     if (_selfId == null) return;
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 25), (_) {
+    print('[SOCKET] Starting heartbeat timer for user: $_selfId');
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       try {
-        _socket?.emit('heartbeat', _selfId);
-      } catch (_) {}
+        if (_socket?.connected == true) {
+          print('[SOCKET] Sending heartbeat for user: $_selfId');
+          _socket?.emit('heartbeat', _selfId);
+        } else {
+          print('[SOCKET] Skipping heartbeat - socket not connected');
+        }
+      } catch (e) {
+        print('[SOCKET] Heartbeat error: $e');
+      }
     });
   }
 
   void _stopHeartbeat() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+  }
+  
+  // -------------------
+  // CallManager Management
+  // -------------------
+  
+  /// Get or create a CallManager instance for a specific user
+  CallManager _getOrCreateCallManager(String userId) {
+    if (!_callManagers.containsKey(userId)) {
+      print('[SOCKET] Creating new CallManager instance for user: $userId');
+      _callManagers[userId] = CallManager();
+    } else {
+      print('[SOCKET] Using existing CallManager instance for user: $userId');
+    }
+    return _callManagers[userId]!;
+  }
+  
+  /// Get the CallManager for the current user
+  CallManager? getCurrentCallManager() {
+    if (_selfId == null) return null;
+    return _callManagers[_selfId!];
+  }
+  
+  /// Clean up CallManager instances for users who have disconnected
+  void _cleanupCallManagers() {
+    // In a real implementation, you might want to track active sessions
+    // and remove CallManager instances for users who have logged out
+    // For now, we'll keep all instances to avoid unexpected behavior
   }
 }

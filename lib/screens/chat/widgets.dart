@@ -368,8 +368,8 @@ Widget buildMessageContent(
 }
 Widget _buildReactionsDisplay(models.Message msg, Function(models.Message)? onReactionTap) {
   // Check if we have any reactions
-  if ((msg.reactions == null || msg.reactions.isEmpty) && 
-      (msg.emojis == null || msg.emojis.isEmpty)) {
+  if ((msg.reactions.isEmpty) && 
+      (msg.emojis.isEmpty)) {
     return const SizedBox.shrink();
   }
   
@@ -377,21 +377,19 @@ Widget _buildReactionsDisplay(models.Message msg, Function(models.Message)? onRe
   final Map<String, int> emojiCounts = {};
   
   // Process reactions (from backend)
-  if (msg.reactions != null && msg.reactions is List) {
-    for (final reaction in msg.reactions) {
-      if (reaction is Map && reaction['emoji'] is String) {
-        final emoji = reaction['emoji'] as String;
-        if (emoji.isNotEmpty) {
-          emojiCounts[emoji] = (emojiCounts[emoji] ?? 0) + 1;
-        }
+  for (final reaction in msg.reactions) {
+    if (reaction['emoji'] is String) {
+      final emoji = reaction['emoji'] as String;
+      if (emoji.isNotEmpty) {
+        emojiCounts[emoji] = (emojiCounts[emoji] ?? 0) + 1;
       }
     }
   }
   
   // Fall back to emojis if no reactions found (legacy support)
-  if (emojiCounts.isEmpty && msg.emojis != null && msg.emojis is List) {
+  if (emojiCounts.isEmpty) {
     for (final emoji in msg.emojis) {
-      if (emoji is String && emoji.isNotEmpty) {
+      if (emoji.isNotEmpty) {
         emojiCounts[emoji] = (emojiCounts[emoji] ?? 0) + 1;
       }
     }

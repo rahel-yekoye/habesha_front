@@ -1,11 +1,10 @@
 import 'dart:io';
 
-import 'package:chat_app_flutter/main.dart';
 import 'package:chat_app_flutter/screens/chat/widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../models/message.dart' as models;
-import '../group_chat_screen.dart'; // For InlineVideoPlayer, InlineAudioPlayer
+// For InlineVideoPlayer, InlineAudioPlayer
 import 'package:dio/dio.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';

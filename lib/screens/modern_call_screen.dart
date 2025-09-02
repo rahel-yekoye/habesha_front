@@ -46,12 +46,14 @@ class _ModernCallScreenState extends State<ModernCallScreen> {
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
   
   Timer? _callTimer;
+  Timer? _connectionMonitor;
   int _callDuration = 0;
   
   @override
   void initState() {
     super.initState();
     _initializeCall();
+    _startConnectionMonitoring();
   }
 
   Future<void> _initializeCall() async {
@@ -98,10 +100,33 @@ class _ModernCallScreenState extends State<ModernCallScreen> {
         _endCall();
       }
     };
+    
+    _webrtcService.onWebRTCConnected = () {
+      if (mounted && widget.isIncoming) {
+        // For incoming calls, send call_answered event when WebRTC connection is established
+        print('[CallScreen] WebRTC connection established for incoming call, sending call_answered to ${widget.partnerId}');
+        widget.socket.emit('call_answered', {
+          'to': widget.partnerId,
+          'from': widget.currentUserId,
+          'callId': widget.callId,
+        });
+      }
+    };
+    
+    // Setup socket listeners for this call screen
+    _setupSocketListeners();
   }
 
   Future<void> _startOutgoingCall() async {
     setState(() => _callState = CallState.connecting);
+    
+    print('[CallScreen] ===== STARTING OUTGOING CALL =====');
+    print('[CallScreen] Partner ID: ${widget.partnerId}');
+    print('[CallScreen] Partner Name: ${widget.partnerName}');
+    print('[CallScreen] Current User ID: ${widget.currentUserId}');
+    print('[CallScreen] Call ID: ${widget.callId}');
+    print('[CallScreen] Is Video: ${widget.isVideo}');
+    print('[CallScreen] Is Incoming: ${widget.isIncoming}');
     
     await _webrtcService.startCall(
       partnerId: widget.partnerId,
@@ -113,18 +138,22 @@ class _ModernCallScreenState extends State<ModernCallScreen> {
   }
 
   Future<void> _answerCall() async {
-    if (widget.incomingOffer == null) return;
-    
     setState(() => _callState = CallState.connecting);
     
-    await _webrtcService.answerCall(
-      partnerId: widget.partnerId,
-      callId: widget.callId,
-      isVideo: widget.isVideo,
-      offer: widget.incomingOffer!,
-      socket: widget.socket,
-      currentUserId: widget.currentUserId,
-    );
+    if (widget.incomingOffer != null) {
+      // If we have the offer, answer immediately
+      await _webrtcService.answerCall(
+        partnerId: widget.partnerId,
+        callId: widget.callId,
+        isVideo: widget.isVideo,
+        offer: widget.incomingOffer!,
+        socket: widget.socket,
+        currentUserId: widget.currentUserId,
+      );
+    } else {
+      // If no offer yet, wait for it via socket listener (already set up in _setupSocketListeners)
+      print('[CallScreen] Waiting for call offer from ${widget.partnerId}');
+    }
   }
 
 
@@ -174,11 +203,212 @@ class _ModernCallScreenState extends State<ModernCallScreen> {
     await _webrtcService.switchCamera();
   }
 
+  void _startConnectionMonitoring() {
+    // Monitor socket connection health every 5 seconds
+    _connectionMonitor = Timer.periodic(Duration(seconds: 5), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      
+      final isConnected = widget.socket.connected;
+      print('[CallScreen] 📡 Connection health check - Connected: $isConnected, Socket ID: ${widget.socket.id}');
+      
+      if (!isConnected && _callState != CallState.ended) {
+        print('[CallScreen] ⚠️ Socket disconnected during active call, attempting reconnection...');
+        try {
+          widget.socket.connect();
+        } catch (e) {
+          print('[CallScreen] ❌ Failed to reconnect socket: $e');
+        }
+      }
+    });
+  }
+
+  void _setupSocketListeners() {
+    print('[CallScreen] Setting up socket listeners for call ${widget.callId}');
+    print('[CallScreen] Socket connected: ${widget.socket.connected}');
+    print('[CallScreen] Socket ID: ${widget.socket.id}');
+    print('[CallScreen] Partner ID: ${widget.partnerId}');
+    print('[CallScreen] Current User ID: ${widget.currentUserId}');
+    print('[CallScreen] Is incoming: ${widget.isIncoming}');
+    
+    // Add comprehensive logging for all socket events
+    widget.socket.onAny((event, data) {
+      print('[CallScreen] 🔔 Socket event: $event, data: $data');
+    });
+    
+    // Verify socket is connected before setting up listeners
+    if (!widget.socket.connected) {
+      print('[CallScreen] ⚠️ WARNING: Socket is not connected when setting up listeners!');
+      print('[CallScreen] Socket state: ${widget.socket.connected}');
+      print('[CallScreen] Socket ID: ${widget.socket.id}');
+    } else {
+      print('[CallScreen] ✅ Socket is connected, setting up listeners');
+      
+      
+    }
+    
+    // Listen for call offers (for incoming calls)
+    widget.socket.on('call_offer', (data) {
+      print('[CallScreen] 📞 Received call_offer event: $data');
+      print('[CallScreen] Offer callId: ${data['callId']}, our callId: ${widget.callId}');
+      print('[CallScreen] Offer from: ${data['from']}, our partnerId: ${widget.partnerId}');
+      print('[CallScreen] Offer data keys: ${data.keys.toList()}');
+      print('[CallScreen] Offer isVideo: ${data['isVideo']}');
+      
+      if (mounted && data['callId'] == widget.callId && data['from'] == widget.partnerId) {
+        print('[CallScreen] ✅ Processing call offer from partner');
+        final offer = data['offer'];
+        if (offer != null && widget.isIncoming) {
+          print('[CallScreen] 🎯 Answering incoming call with received offer');
+          _webrtcService.answerCall(
+            partnerId: widget.partnerId,
+            callId: widget.callId,
+            isVideo: widget.isVideo,
+            offer: offer,
+            socket: widget.socket,
+            currentUserId: widget.currentUserId,
+          );
+        } else {
+          print('[CallScreen] ⚠️ Not answering - offer is null or not incoming call');
+        }
+      } else {
+        print('[CallScreen] ❌ Ignoring call offer - mounted: $mounted, callId match: ${data['callId'] == widget.callId}, from match: ${data['from'] == widget.partnerId}');
+        print('[CallScreen] Call ID comparison: "${data['callId']}" == "${widget.callId}" = ${data['callId'] == widget.callId}');
+        print('[CallScreen] From comparison: "${data['from']}" == "${widget.partnerId}" = ${data['from'] == widget.partnerId}');
+      }
+    });
+    
+    // Listen for call answers (for outgoing calls)
+    widget.socket.on('call_answer', (data) {
+      print('[CallScreen] 📞 Received call_answer event: $data');
+      if (mounted && data['callId'] == widget.callId && data['from'] == widget.partnerId) {
+        print('[CallScreen] ✅ Processing call answer for our call');
+        _webrtcService.handleAnswer(data['answer']);
+      } else {
+        print('[CallScreen] ❌ Ignoring call answer - mounted: $mounted, callId match: ${data['callId'] == widget.callId}, from match: ${data['from'] == widget.partnerId}');
+      }
+    });
+    
+    // Listen for ICE candidates
+    widget.socket.on('ice_candidate', (data) {
+      print('[CallScreen] 🧊 Received ice_candidate event: $data');
+      if (mounted && data['from'] == widget.partnerId) {
+        print('[CallScreen] ✅ Processing ICE candidate from partner');
+        _webrtcService.handleIceCandidate(data['candidate']);
+      } else {
+        print('[CallScreen] ❌ Ignoring ICE candidate - mounted: $mounted, from match: ${data['from'] == widget.partnerId}');
+      }
+    });
+    
+    // Listen for call end
+    widget.socket.on('call_end', (data) {
+      print('[CallScreen] 📞 Received call_end event: $data');
+      if (mounted && (data['callId'] == widget.callId || data['from'] == widget.partnerId)) {
+        print('[CallScreen] ✅ Call ended by remote party');
+        _endCall();
+      } else {
+        print('[CallScreen] ❌ Ignoring call end - mounted: $mounted, callId match: ${data['callId'] == widget.callId}, from match: ${data['from'] == widget.partnerId}');
+      }
+    });
+    
+    // Listen for call answered notification (for outgoing calls)
+    widget.socket.on('call_answered', (data) {
+      print('[CallScreen] 📞 Received call_answered notification: $data');
+      if (mounted && data['callId'] == widget.callId && data['from'] == widget.partnerId) {
+        print('[CallScreen] ✅ Call was answered by partner');
+        setState(() => _callState = CallState.connected);
+      }
+    });
+    
+    // CRITICAL FIX: Listen for server instruction to start WebRTC offer (for outgoing calls)
+    widget.socket.on('start_webrtc_offer', (data) {
+      print('[CallScreen] 🚀 Received start_webrtc_offer event: $data');
+      print('[CallScreen] Partner ID: ${data['partnerId']}, our partnerId: ${widget.partnerId}');
+      print('[CallScreen] Call ID: ${data['callId']}, our callId: ${widget.callId}');
+      print('[CallScreen] Is outgoing call: ${!widget.isIncoming}');
+      
+      if (mounted && 
+          data['callId'] == widget.callId && 
+          data['partnerId'] == widget.partnerId && 
+          !widget.isIncoming) {
+        print('[CallScreen] ✅ Starting WebRTC offer process as instructed by server');
+        // The call was answered, now start the WebRTC offer process
+        _webrtcService.startCall(
+          partnerId: widget.partnerId,
+          callId: widget.callId,
+          isVideo: widget.isVideo,
+          socket: widget.socket,
+          currentUserId: widget.currentUserId,
+        );
+      } else {
+        print('[CallScreen] ❌ Ignoring start_webrtc_offer - mounted: $mounted, callId match: ${data['callId'] == widget.callId}, partnerId match: ${data['partnerId'] == widget.partnerId}, is outgoing: ${!widget.isIncoming}');
+      }
+    });
+    
+
+    
+    // Listen for socket disconnection
+    widget.socket.onDisconnect((reason) {
+      print('[CallScreen] ⚠️ Socket disconnected during call! Reason: $reason');
+      print('[CallScreen] Socket state - connected: ${widget.socket.connected}, id: ${widget.socket.id}');
+      if (mounted) {
+        setState(() => _callState = CallState.ended);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connection lost: ${reason ?? "Unknown"}'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 5),
+          ),
+        );
+      }
+    });
+    
+    // Listen for socket reconnection
+    widget.socket.onConnect((_) {
+      print('[CallScreen] 🔄 Socket reconnected during call!');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connection restored'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    });
+    
+    // Listen for connection errors
+    widget.socket.onError((error) {
+      print('[CallScreen] ❌ Socket error during call: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connection error: $error'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    });
+  }
+
   @override
   void dispose() {
+    print('[CallScreen] Disposing call screen for call ${widget.callId}');
     _callTimer?.cancel();
+    _connectionMonitor?.cancel();
     _localRenderer.dispose();
     _remoteRenderer.dispose();
+    _webrtcService.dispose();
+    // Clean up all socket listeners
+    widget.socket.off('call_offer');
+    widget.socket.off('call_answer');
+    widget.socket.off('ice_candidate');
+    widget.socket.off('call_end');
+    widget.socket.off('call_answered');
+    widget.socket.off('start_webrtc_offer');
     super.dispose();
   }
 

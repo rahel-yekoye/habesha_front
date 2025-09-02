@@ -14,6 +14,7 @@ import '../../models/message.dart' as models;
 import '../../services/profile_service.dart' show ProfileService;
 import '../../services/api_service.dart';
 import '../../services/socket_service.dart';
+import '../../services/call_invitation_service.dart';
 import 'widgets.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -202,7 +203,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final token = prefs.getString('token') ?? widget.jwtToken;
 
       // Check if token is expired
-      if (token != null && token.isNotEmpty) {
+      if (token.isNotEmpty) {
         try {
           // Simple check for JWT expiration (this is a basic check, you might want to use a JWT library for production)
           final parts = token.split('.');
@@ -228,7 +229,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final response = await http.get(
         Uri.parse('http://localhost:4000/profile/$username'),
         headers: {
-          if (token != null && token.isNotEmpty)
+          if (token.isNotEmpty)
             'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
         },
@@ -565,8 +566,9 @@ class _ChatScreenState extends State<ChatScreen> {
         if (mounted) {
           setState(() {
             if (id != null && id.isNotEmpty) _deliveredSet.add(id);
-            if (clientId != null && clientId.isNotEmpty)
+            if (clientId != null && clientId.isNotEmpty) {
               _deliveredSet.add(clientId);
+            }
           });
         }
       }
@@ -703,8 +705,8 @@ class _ChatScreenState extends State<ChatScreen> {
       readBy: [widget.currentUser],
       isFile: true,
       senderMetadata: {
-        'name': currentUserProfile?['name'] ?? widget.currentUser,
-        'profilePicture': currentUserProfile?['profilePicture'],
+        'name': currentUserProfile['name'] ?? widget.currentUser,
+        'profilePicture': currentUserProfile['profilePicture'],
       },
     );
 
@@ -821,8 +823,8 @@ class _ChatScreenState extends State<ChatScreen> {
       readBy: [widget.currentUser],
       isFile: fileUrl.isNotEmpty,
       senderMetadata: {
-        'name': currentUserProfile?['name'] ?? widget.currentUser,
-        'profilePicture': currentUserProfile?['profilePicture'],
+        'name': currentUserProfile['name'] ?? widget.currentUser,
+        'profilePicture': currentUserProfile['profilePicture'],
       },
       replyTo: _replyingToMessage?.id,
     );
@@ -1595,6 +1597,41 @@ class _ChatScreenState extends State<ChatScreen> {
             tooltip: 'Video Call',
             onPressed: _onVideoCallPressed,
           ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              switch (value) {
+                case 'share_voice_call':
+                  _shareVoiceCallUrl();
+                  break;
+                case 'share_video_call':
+                  _shareVideoCallUrl();
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'share_voice_call',
+                child: Row(
+                  children: [
+                    Icon(Icons.share, color: Colors.green),
+                    SizedBox(width: 8),
+                    Text('Share Voice Call Link'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'share_video_call',
+                child: Row(
+                  children: [
+                    Icon(Icons.share, color: Colors.blue),
+                    SizedBox(width: 8),
+                    Text('Share Video Call Link'),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
       ),
       body: Stack(
@@ -1846,8 +1883,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _readStatusIcon(models.Message msg, String otherUser) {
-    if (!msg.sender.contains(widget.currentUser))
+    if (!msg.sender.contains(widget.currentUser)) {
       return const SizedBox.shrink();
+    }
     // Read -> double check blue
     if (msg.readBy.contains(otherUser)) {
       return const Icon(Icons.done_all, size: 16, color: Colors.blueAccent);
@@ -1869,31 +1907,223 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onVoiceCallPressed() async {
     if (!mounted) return;
 
-    // Get current user's display name
-    final currentUserProfile = await _getUserProfile(widget.currentUser);
-    final callerName = currentUserProfile?['name'] ?? widget.currentUser;
+    // Get partner's display name (not caller's name)
+    final partnerProfile = await _getUserProfile(widget.otherUser);
+    final partnerName = partnerProfile['name'] ?? widget.otherUser;
 
-    globalCallManager.startCall(
-      partnerId: widget.otherUser,
-      partnerName: callerName,
-      isVideo: false,
-      currentUserId: widget.currentUser,
-    );
+    // Use the current user's CallManager instance
+    final callManager = socketService.getCurrentCallManager();
+    if (callManager != null) {
+      callManager.startCall(
+        partnerId: widget.otherUser,
+        partnerName: partnerName,
+        isVideo: false,
+        currentUserId: widget.currentUser,
+      );
+    } else {
+      print('Error: CallManager not initialized for current user');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to initiate call. Please try again.')),
+      );
+    }
   }
 
   // Handle video call button press
   void _onVideoCallPressed() async {
     if (!mounted) return;
 
-    // Get current user's display name
-    final currentUserProfile = await _getUserProfile(widget.currentUser);
-    final callerName = currentUserProfile?['name'] ?? widget.currentUser;
+    // Get partner's display name (not caller's name)
+    final partnerProfile = await _getUserProfile(widget.otherUser);
+    final partnerName = partnerProfile['name'] ?? widget.otherUser;
 
-    globalCallManager.startCall(
-      partnerId: widget.otherUser,
-      partnerName: callerName,
-      isVideo: true,
-      currentUserId: widget.currentUser,
+    // Use the current user's CallManager instance
+    final callManager = socketService.getCurrentCallManager();
+    if (callManager != null) {
+      callManager.startCall(
+        partnerId: widget.otherUser,
+        partnerName: partnerName,
+        isVideo: true,
+        currentUserId: widget.currentUser,
+      );
+    } else {
+      print('Error: CallManager not initialized for current user');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to initiate call. Please try again.')),
+      );
+    }
+  }
+
+  // Share voice call URL
+  void _shareVoiceCallUrl() async {
+    try {
+      final currentUserProfile = await _getUserProfile(widget.currentUser);
+      final callerName = currentUserProfile['name'] ?? widget.currentUser;
+      
+      final callUrl = CallInvitationService.generateCallInvitationUrl(
+        callerId: widget.currentUser,
+        callerName: callerName,
+        calleeId: widget.otherUser,
+        isVideo: false,
+      );
+      
+      await Clipboard.setData(ClipboardData(text: callUrl));
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.link, color: Colors.white),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('Voice call link copied to clipboard! Share it with your contact.'),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 3),
+            action: SnackBarAction(
+              label: 'Show',
+              textColor: Colors.white,
+              onPressed: () {
+                _showCallUrlDialog(callUrl, false);
+              },
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error sharing voice call URL: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to generate call link'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Share video call URL
+  void _shareVideoCallUrl() async {
+    try {
+      final currentUserProfile = await _getUserProfile(widget.currentUser);
+      final callerName = currentUserProfile['name'] ?? widget.currentUser;
+      
+      final callUrl = CallInvitationService.generateCallInvitationUrl(
+        callerId: widget.currentUser,
+        callerName: callerName,
+        calleeId: widget.otherUser,
+        isVideo: true,
+      );
+      
+      await Clipboard.setData(ClipboardData(text: callUrl));
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.link, color: Colors.white),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('Video call link copied to clipboard! Share it with your contact.'),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.blue,
+            duration: const Duration(seconds: 3),
+            action: SnackBarAction(
+              label: 'Show',
+              textColor: Colors.white,
+              onPressed: () {
+                _showCallUrlDialog(callUrl, true);
+              },
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error sharing video call URL: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to generate call link'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // Show call URL dialog
+  void _showCallUrlDialog(String callUrl, bool isVideo) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              isVideo ? Icons.videocam : Icons.call,
+              color: isVideo ? Colors.blue : Colors.green,
+            ),
+            const SizedBox(width: 8),
+            Text('${isVideo ? 'Video' : 'Voice'} Call Link'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Share this link with ${widget.otherUser} to start a ${isVideo ? 'video' : 'voice'} call:',
+              style: const TextStyle(fontSize: 14),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey[300]!),
+              ),
+              child: SelectableText(
+                callUrl,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'The link expires in 5 minutes.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: callUrl));
+              Navigator.of(context).pop();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Link copied to clipboard!'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            },
+            icon: const Icon(Icons.copy),
+            label: const Text('Copy Link'),
+          ),
+        ],
+      ),
     );
   }
 }

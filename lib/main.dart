@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'screens/splash_screen.dart';
 import 'services/socket_service.dart';
-import 'services/call_manager.dart';
+import 'services/call_invitation_service.dart';
 import 'providers/theme_provider.dart';
 
 @immutable
@@ -46,7 +46,6 @@ class AvatarColors extends ThemeExtension<AvatarColors> {
 // Global navigator key for navigation from anywhere in the app
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 final SocketService socketService = SocketService();
-final CallManager globalCallManager = CallManager();
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -71,14 +70,12 @@ class MyApp extends StatelessWidget {
                 primary: const Color(0xFF0088CC), // Telegram Blue
                 primaryContainer: const Color(0xFF0077B5), // Darker Blue
                 secondary: const Color(0xFF5AC8FB), // Light Blue
-                surface: Colors.white,
-                background: const Color(0xFFF5F5F5), // Light Gray Background
+                surface: Colors.white, // Light Gray Background
                 onPrimary: Colors.white,
                 onSecondary: Colors.black87,
                 onSurface: Colors.black87,
-                onBackground: Colors.black87,
                 brightness: Brightness.light,
-                surfaceVariant: Colors.white,
+                surfaceContainerHighest: Colors.white,
                 onSurfaceVariant: const Color(0xFF6B7B8F), // Gray Text
               ),
               useMaterial3: true,
@@ -110,14 +107,12 @@ class MyApp extends StatelessWidget {
                 primary: const Color(0xFF2AABEE), // Telegram Blue
                 primaryContainer: const Color(0xFF1E96D2), // Darker Blue
                 secondary: const Color(0xFF5AC8FB), // Light Blue
-                surface: const Color(0xFF18222C), // Dark Blue-Gray
-                background: const Color(0xFF0E1621), // Dark Blue-Black
+                surface: const Color(0xFF18222C), // Dark Blue-Black
                 onPrimary: Colors.white,
                 onSecondary: Colors.black87,
                 onSurface: Colors.white,
-                onBackground: Colors.white,
                 brightness: Brightness.dark,
-                surfaceVariant: const Color(0xFF1F2E3D), // Slightly Lighter Blue-Gray
+                surfaceContainerHighest: const Color(0xFF1F2E3D), // Slightly Lighter Blue-Gray
                 onSurfaceVariant: const Color(0xFFB0C4DE), // Light Blue-Gray Text
               ),
               useMaterial3: true,

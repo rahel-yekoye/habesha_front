@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'inbox_screen.dart';
 import 'package:chat_app_flutter/services/socket_service.dart';
 import 'package:chat_app_flutter/services/auth_service.dart';
+import 'package:chat_app_flutter/services/call_invitation_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -51,7 +52,10 @@ class _LoginScreenState extends State<LoginScreen> {
         );
 
         // ✅ Connect to socket after login
-        SocketService().connect(userId: loggedInUser); // Use email or user ID if preferred
+        SocketService().connect(userId: userId, jwtToken: jwtToken);
+
+        // Check for pending call invitation after login
+        await CallInvitationService.checkPendingCallAfterLogin();
 
         // ✅ Navigate to inbox
         Navigator.pushReplacement(

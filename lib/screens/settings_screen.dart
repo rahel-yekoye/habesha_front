@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:chat_app_flutter/services/auth_service.dart';
 import 'package:chat_app_flutter/providers/theme_provider.dart';
 import 'package:chat_app_flutter/screens/profile_screen.dart';
@@ -52,7 +51,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     showModalBottomSheet(
       context: context,
       builder: (BuildContext context) {
-        return Container(
+        return SizedBox(
           height: 200,
           child: Column(
             children: [

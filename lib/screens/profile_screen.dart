@@ -612,7 +612,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // Email
-                  if (_userProfile?.email != null && _userProfile!.email!.isNotEmpty)
+                  if (_userProfile?.email != null && _userProfile!.email.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
                       child: Row(
@@ -620,7 +620,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           Icon(Icons.email, color: Colors.grey[600]),
                           const SizedBox(width: 16.0),
                           Text(
-                            _userProfile!.email!,
+                            _userProfile!.email,
                             style: const TextStyle(fontSize: 16.0),
                           ),
                         ],

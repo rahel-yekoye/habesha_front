@@ -4,9 +4,7 @@ import 'package:contacts_service/contacts_service.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:url_launcher/url_launcher.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/socket_service.dart';
 
 class ContactsScreen extends StatefulWidget {
@@ -14,10 +12,10 @@ class ContactsScreen extends StatefulWidget {
   final String currentUser;
 
   const ContactsScreen({
-    Key? key,
+    super.key,
     required this.jwtToken,
     required this.currentUser,
-  }) : super(key: key);
+  });
 
   @override
   _ContactsScreenState createState() => _ContactsScreenState();
