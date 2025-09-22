@@ -1,12 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../screens/modern_call_screen.dart';
 import '../screens/login_screen.dart';
 import '../services/auth_service.dart';
-import '../services/socket_service.dart';
 import '../services/call_manager.dart';
 
 class CallInvitationService {
@@ -20,7 +18,7 @@ class CallInvitationService {
     required String calleeId,
     required bool isVideo,
   }) {
-    final callId = '${DateTime.now().millisecondsSinceEpoch}_${callerId}_${calleeId}';
+    final callId = '${DateTime.now().millisecondsSinceEpoch}_${callerId}_$calleeId';
     final callData = {
       'callerId': callerId,
       'callerName': callerName,
@@ -98,7 +96,7 @@ class CallInvitationService {
     
     // Verify this call is for the current user
     if (currentUserId != callData['calleeId']) {
-      print('[CallInvitation] Call is not for current user (${currentUserId} vs ${callData['calleeId']})');
+      print('[CallInvitation] Call is not for current user ($currentUserId vs ${callData['calleeId']})');
       _showWrongUserDialog(callData);
       return;
     }

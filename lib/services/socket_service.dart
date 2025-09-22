@@ -328,72 +328,43 @@ class SocketService {
     print('⏳ Setting up socket connection with timeout: $timeout');
     
     // Function to handle connection timeout
-    void handleConnectionTimeout() {
-      if (completer.isCompleted) return;
-      
-      connectionAttempts++;
-      if (connectionAttempts >= maxAttempts) {
-        final error = '❌ Failed to connect after $maxAttempts attempts for user: $userId';
-        print(error);
-        if (!completer.isCompleted) {
-          completer.completeError(error);
-        }
-        return;
-      }
-      
-      print('⚠️ Connection attempt $connectionAttempts of $maxAttempts...');
-      // Don't manually disconnect/reconnect - let socket handle it automatically
-    }
-    
-    // Set up connection timer
-    Timer? connectionTimer;
-    
-    void startConnectionTimer() {
-      connectionTimer?.cancel();
-      connectionTimer = Timer.periodic(timeout, (_) {
-        if (!completer.isCompleted) {
-          handleConnectionTimeout();
+    // Set up connection timeout with more robust error handling
+    Timer? connectionTimer = Timer(timeout, () {
+      if (!completer.isCompleted) {
+        connectionAttempts++;
+        final errorMsg = '❌ Connection timeout after ${timeout.inSeconds}s (attempt $connectionAttempts/$maxAttempts) for user: $userId';
+        print(errorMsg);
+        
+        if (connectionAttempts >= maxAttempts) {
+          if (!completer.isCompleted) {
+            completer.completeError('Failed to connect after $maxAttempts attempts for user: $userId');
+          }
         } else {
-          connectionTimer?.cancel();
+          // Retry connection
+          print('🔄 Retrying connection for user: $userId (attempt ${connectionAttempts + 1}/$maxAttempts)');
+          if (_socket != null) {
+            _socket!.disconnect();
+            _socket!.dispose();
+          }
+          // Recursive call with updated attempt count
+          connect(userId: userId, jwtToken: _jwtToken).then((_) {
+            if (!completer.isCompleted) completer.complete();
+          }).catchError((e) {
+            if (!completer.isCompleted) completer.completeError(e);
+          });
         }
-      });
-    }
+      }
+    });
     
     // Cleanup function
     void cleanup() {
-      connectionTimer?.cancel();
+      connectionTimer.cancel();
     }
-    
-    // Handle successful connection - REMOVED DUPLICATE HANDLER
-    
-    // Handle connection errors
-    _socket!.onConnectError((error) {
-      print('❌ Socket connection error: $error');
-      if (!completer.isCompleted) {
-        completer.completeError(error);
-      }
-      cleanup();
-    });
-    
-    // Set up other socket event handlers
-    _socket!.onDisconnect((reason) {
-      print('ℹ️ Socket disconnected. Reason: $reason');
-      _stopHeartbeat();
-    });
-    _socket!.onError((error) => print('❌ Socket error: $error'));
-    _socket!.onReconnect((_) {
-      print('🔄 Socket reconnected!');
-      _startHeartbeat();
-    });
-    _socket!.onReconnectAttempt((attempt) => print('🔄 Reconnection attempt: $attempt'));
-    _socket!.onReconnectError((error) => print('❌ Reconnection error: $error'));
-    
-    // Start the initial connection attempt and timer
-    startConnectionTimer();
-    _socket!.connect();
 
+    // Set up socket connection handlers
     _socket!.onConnect((_) {
       try {
+        connectionTimer.cancel(); // Cancel timeout timer on successful connection
         print('✅ Connected to the socket server for user: $_selfId');
         print('[SOCKET] Socket ID: ${_socket!.id}');
         
@@ -403,7 +374,7 @@ class SocketService {
 
         // Register user with the server
         print('[SOCKET] Registering user: $_selfId');
-        _socket!.emit('register_user', {
+        _socket!.emit('register', {
           'userId': _selfId,
           'username': _selfId, // For now, use same value for both
         });
@@ -458,9 +429,7 @@ class SocketService {
       if (!completer.isCompleted) {
         completer.completeError(errorMsg);
       }
-      
-      // Let socket handle reconnection automatically
-      print('🔄 Socket will attempt automatic reconnection...');
+      cleanup();
     });
     
     // Handle reconnection events
@@ -473,6 +442,7 @@ class SocketService {
       print('❌ General Error: $data');
     });
 
+    // Start the connection
     _socket!.connect();
 
     return completer.future;

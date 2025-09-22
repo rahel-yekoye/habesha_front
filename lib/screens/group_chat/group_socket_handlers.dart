@@ -18,6 +18,11 @@ class GroupSocketHandlers {
     required Function(IO.Socket) onSocket,
     required VoidCallback onScrollToBottom,
   }) {
+    // Add safety check for context
+    if (!context.mounted) {
+      print('❌ Context not mounted, aborting socket initialization');
+      return;
+    }
     IO.Socket? socket = IO.io('http://localhost:4000', <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
@@ -31,16 +36,22 @@ class GroupSocketHandlers {
 
     socket.on('disconnect', (_) {
       print('Disconnected from Socket.IO - attempting to reconnect');
-      Future.delayed(const Duration(seconds: 2), () {
-        socket.connect();
-      });
+      if (context.mounted) {
+        Future.delayed(const Duration(seconds: 2), () {
+          if (context.mounted) {
+            socket.connect();
+          }
+        });
+      }
     });
 
     socket.on('connect_error', (error) {
       print('Socket connection error: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Connection error')),
-      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Connection error')),
+        );
+      }
     });
 
     socket.on('connect', (_) {
@@ -100,10 +111,22 @@ class GroupSocketHandlers {
     });
 
     socket.on('group_message_deleted', (data) {
+      print('🔥 Received group_message_deleted event: $data');
       final messageId = data['messageId'] as String?;
       if (messageId != null) {
+        print('🗑️ Removing message with ID: $messageId from local messages');
+        final beforeCount = messages.length;
         messages.removeWhere((m) => m.id == messageId);
-        onMessagesUpdate(List<models.Message>.from(messages));
+        final afterCount = messages.length;
+        print('📊 Messages count: $beforeCount → $afterCount');
+        
+        // Force UI update by creating a completely new list
+        final updatedMessages = List<models.Message>.from(messages);
+        print('🔄 Triggering UI update with ${updatedMessages.length} messages');
+        onMessagesUpdate(updatedMessages);
+        print('✅ UI update callback executed');
+      } else {
+        print('❌ No messageId in delete event data');
       }
     });
 
@@ -117,6 +140,36 @@ class GroupSocketHandlers {
             content: newContent,
             edited: true,
           );
+          onMessagesUpdate(List<models.Message>.from(messages));
+        }
+      }
+    });
+
+    socket.on('group_message_reaction', (data) {
+      final messageId = data['messageId'] as String?;
+      final emoji = data['emoji'] as String?;
+      final user = data['user'] as String?;
+      final action = data['action'] as String?;
+      
+      if (messageId != null && emoji != null && user != null && action != null) {
+        final index = messages.indexWhere((m) => m.id == messageId);
+        if (index != -1) {
+          final currentMessage = messages[index];
+          List<Map<String, String>> newReactions = List<Map<String, String>>.from(
+            currentMessage.reactions.map((r) => Map<String, String>.from(r))
+          );
+          
+          if (action == 'add') {
+            // Add reaction if not already present
+            if (!newReactions.any((r) => r['user'] == user && r['emoji'] == emoji)) {
+              newReactions.add({'user': user, 'emoji': emoji});
+            }
+          } else if (action == 'remove') {
+            // Remove reaction
+            newReactions.removeWhere((r) => r['user'] == user && r['emoji'] == emoji);
+          }
+          
+          messages[index] = currentMessage.copyWith(reactions: newReactions);
           onMessagesUpdate(List<models.Message>.from(messages));
         }
       }
@@ -139,6 +192,7 @@ class GroupSocketHandlers {
     socket.off('group_message');
     socket.off('group_message_deleted');
     socket.off('group_message_edited');
+    socket.off('group_message_reaction');
     socket.off('connect_error');
     socket.offAny();
     socket.disconnect();
@@ -156,6 +210,8 @@ class GroupSocketHandlers {
     required VoidCallback onClearFiles,
     required VoidCallback onScrollToBottom,
     required List<models.Message> currentMessages,
+    models.Message? replyingTo,
+    VoidCallback? onClearReply,
   }) async {
     final text = messageController.text.trim();
     String? fileUrl;
@@ -199,6 +255,7 @@ class GroupSocketHandlers {
       fileUrl: fileUrl ?? '',
       emojis: [],
       readBy: [widget.currentUser],
+      replyTo: replyingTo?.id,
     );
     messages.add(localMessage);
     onUpdateMessages(List<models.Message>.from(messages));
@@ -217,6 +274,7 @@ class GroupSocketHandlers {
       'isGroup': true,
       'emojis': [],
       'readBy': [widget.currentUser],
+      'replyTo': replyingTo?.id,
     };
     try {
       socket!.emit('send_group_message', messageData);
@@ -227,6 +285,12 @@ class GroupSocketHandlers {
         'sender': widget.currentUser,
       });
       onClearFiles();
+      // Clear reply state after sending with a small delay to show the preview
+      if (replyingTo != null) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          onClearReply?.call();
+        });
+      }
     } catch (e) {
       print('Error sending message: $e');
       ScaffoldMessenger.of(context).showSnackBar(

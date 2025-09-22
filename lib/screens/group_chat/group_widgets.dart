@@ -15,13 +15,14 @@ class GroupMessageBubble extends StatelessWidget {
   final models.Message message;
   final bool isSender;
   final bool isSelected;
+  final Function(LongPressStartDetails)? onLongPress;
+  final VoidCallback? onTap;
   final String? editingMessageId;
   final TextEditingController? editController;
-  final void Function(LongPressStartDetails)? onLongPress;
-  final VoidCallback? onTap;
-  final Future<void> Function(String)? onEdit;
+  final Function(String)? onEdit;
   final VoidCallback? onDelete;
   final String Function(String)? usernameResolver;
+  final models.Message? Function(String)? getMessageById;
 
   const GroupMessageBubble({
     super.key,
@@ -35,6 +36,7 @@ class GroupMessageBubble extends StatelessWidget {
     this.onEdit,
     this.onDelete,
     this.usernameResolver,
+    this.getMessageById,
   });
 
   @override
@@ -43,7 +45,6 @@ class GroupMessageBubble extends StatelessWidget {
     final bubbleColor = isSender
         ? (isSelected ? Colors.blue[400] : Colors.blue[200])
         : (isSelected ? Colors.grey[400] : Colors.grey[300]);
-    final align = isSender ? Alignment.centerRight : Alignment.centerLeft;
     final borderRadius = BorderRadius.only(
       topLeft: const Radius.circular(16),
       topRight: const Radius.circular(16),
@@ -51,100 +52,288 @@ class GroupMessageBubble extends StatelessWidget {
       bottomRight: Radius.circular(isSender ? 0 : 16),
     );
 
-    return Align(
-      alignment: align,
-      child: GestureDetector(
-        onTap: onTap,
-        onLongPressStart: onLongPress,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.7,
-          ),
-          decoration: BoxDecoration(
-            color: bubbleColor,
-            borderRadius: borderRadius,
-            border: isSelected
-                ? Border.all(color: Colors.blueAccent, width: 2)
-                : null,
-          ),
-          child: isEditing && editController != null
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    TextField(
-                      controller: editController,
-                      maxLines: null,
-                      autofocus: true,
-                      decoration: InputDecoration(
-                        suffixIcon: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.cancel),
-                              onPressed: () {
-                                FocusScope.of(context).unfocus();
-                                editController?.clear();
-                              },
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Ensure we have valid constraints before building
+        if (constraints.maxWidth <= 0 || constraints.maxHeight <= 0) {
+          return const SizedBox.shrink();
+        }
+        
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+          child: Row(
+            mainAxisAlignment: isSender ? MainAxisAlignment.end : MainAxisAlignment.start,
+            children: [
+              Flexible(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: constraints.maxWidth * 0.7,
+                    minWidth: 80,
+                    minHeight: 40,
+                  ),
+                  child: RepaintBoundary(
+                    child: MouseRegion(
+                      cursor: SystemMouseCursors.click,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTap: onTap != null ? () {
+                          if (context.mounted) {
+                            onTap!();
+                          }
+                        } : null,
+                        onLongPressStart: onLongPress != null ? (details) {
+                          if (context.mounted) {
+                            try {
+                              onLongPress!(LongPressStartDetails(
+                                globalPosition: details.globalPosition,
+                                localPosition: details.localPosition,
+                              ));
+                            } catch (e) {
+                              print('Error handling long press: $e');
+                            }
+                          }
+                        } : null,
+                        child: Container(
+                          constraints: const BoxConstraints(
+                            minWidth: 80,
+                            minHeight: 40,
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+                          decoration: BoxDecoration(
+                            color: bubbleColor,
+                            borderRadius: borderRadius,
+                            border: isSelected
+                                ? Border.all(color: Colors.blueAccent, width: 2)
+                                : null,
+                          ),
+                          child: IntrinsicWidth(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (!isSender && usernameResolver != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 4.0),
+                                    child: Text(
+                                      usernameResolver!(message.sender),
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                  ),
+                                if (isEditing && editController != null)
+                                  _buildEditingWidget()
+                                else
+                                  _buildMessageContent(),
+                                if (message.reactions.isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: _buildReactions(message.reactions),
+                                  ),
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        _formatTime(message.timestamp),
+                                        style: const TextStyle(
+                                            fontSize: 11, color: Colors.black54),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.save),
-                              onPressed: () async {
-                                final text = editController!.text.trim();
-                                if (text.isNotEmpty && onEdit != null) {
-                                  await onEdit!(text);
-                                }
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                )
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (!isSender && usernameResolver != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 2.0),
-                        child: Text(
-                          usernameResolver!(message.sender),
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black54,
                           ),
                         ),
                       ),
-                    if (message.fileUrl.isNotEmpty)
-                      buildFilePreview(context, message),
-                    Text(
-                      message.content,
-                      style: const TextStyle(fontSize: 16),
                     ),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        Text(
-                          _formatTime(message.timestamp),
-                          style: const TextStyle(
-                              fontSize: 11, color: Colors.black54),
-                        ),
-                        if (onDelete != null)
-                          IconButton(
-                            icon: const Icon(Icons.delete, size: 16),
-                            onPressed: onDelete,
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                      ],
-                    ),
-                  ],
+                  ),
                 ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEditingWidget() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        TextField(
+          controller: editController,
+          maxLines: null,
+          autofocus: true,
+          decoration: InputDecoration(
+            border: const OutlineInputBorder(),
+            isDense: true,
+            suffixIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.cancel, size: 20),
+                  onPressed: () {
+                    // Use the current context from the widget build method
+                    editController?.clear();
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.save, size: 20),
+                  onPressed: () async {
+                    final text = editController!.text.trim();
+                    if (text.isNotEmpty && onEdit != null) {
+                      await onEdit!(text);
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMessageContent() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Build reply preview if this message is a reply
+        if (message.replyTo != null && message.replyTo!.isNotEmpty && getMessageById != null) ...[
+          _buildReplyPreview(),
+        ] else if (message.replyTo != null) ...[
+          // Debug: Show what replyTo contains
+          Container(
+            padding: const EdgeInsets.all(4),
+            margin: const EdgeInsets.only(bottom: 4),
+            decoration: BoxDecoration(
+              color: Colors.red[100],
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              'DEBUG: replyTo="${message.replyTo}", isEmpty=${message.replyTo!.isEmpty}, getMessageById=${getMessageById != null}',
+              style: const TextStyle(fontSize: 10, color: Colors.black),
+            ),
+          ),
+        ],
+        if (message.fileUrl.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8.0),
+            child: Builder(
+              builder: (context) => buildFilePreview(context, message),
+            ),
+          ),
+        if (message.content.trim().isNotEmpty)
+          Text(
+            message.content,
+            style: const TextStyle(fontSize: 16,color: Colors.black          ),
+     ) ],
+    );
+  }
+
+  Widget _buildReplyPreview() {
+    final repliedMessage = getMessageById!(message.replyTo!);
+    if (repliedMessage == null) {
+      return const SizedBox.shrink();
+    }
+
+    final previewText = repliedMessage.content.isNotEmpty 
+        ? repliedMessage.content 
+        : repliedMessage.fileUrl.isNotEmpty 
+            ? 'File' 
+            : 'Message';
+            
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(8.0),
+      margin: const EdgeInsets.only(bottom: 4.0),
+      decoration: BoxDecoration(
+        color: Colors.grey[200],
+        borderRadius: BorderRadius.circular(8.0),
+        border: Border(
+          left: BorderSide(
+            color: Colors.blue,
+            width: 3.0,
+          ),
         ),
       ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Replying to ${repliedMessage.sender.split('@')[0]}',
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 12.0,
+              color: Colors.blue,
+            ),
+          ),
+          const SizedBox(height: 4.0),
+          Text(
+            previewText.length > 50 
+                ? '${previewText.substring(0, 50)}...' 
+                : previewText,
+            style: const TextStyle(fontSize: 14.0),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReactions(List<Map<String, String>> reactions) {
+    // Group reactions by emoji
+    final Map<String, List<String>> groupedReactions = {};
+    
+    for (final reaction in reactions) {
+      final emoji = reaction['emoji'];
+      final user = reaction['user'];
+      
+      if (emoji != null && user != null) {
+        groupedReactions.putIfAbsent(emoji, () => []);
+        groupedReactions[emoji]!.add(user);
+      }
+    }
+
+    return Wrap(
+      spacing: 4,
+      runSpacing: 2,
+      children: groupedReactions.entries.map((entry) {
+        final emoji = entry.key;
+        final users = entry.value;
+        final count = users.length;
+        
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.grey[200],
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.grey[300]!),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(emoji, style: const TextStyle(fontSize: 14)),
+              if (count > 1) ...[
+                const SizedBox(width: 2),
+                Text(
+                  count.toString(),
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+              ],
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 }
@@ -169,6 +358,9 @@ class GroupChatInputField extends StatelessWidget {
   final void Function(int) onRemoveFile;
   final Future<List<PlatformFile>?> Function() pickFiles;
   final bool canSend;
+  final models.Message? replyingTo;
+  final VoidCallback? onCancelReply;
+  final String Function(String)? usernameResolver;
 
   const GroupChatInputField({
     super.key,
@@ -181,12 +373,66 @@ class GroupChatInputField extends StatelessWidget {
     required this.onRemoveFile,
     required this.pickFiles,
     required this.canSend,
+    this.replyingTo,
+    this.onCancelReply,
+    this.usernameResolver,
   });
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
+        if (replyingTo != null)
+          Container(
+            padding: const EdgeInsets.all(8.0),
+            margin: const EdgeInsets.only(left: 8.0, right: 8.0, bottom: 4.0),
+            decoration: BoxDecoration(
+              color: Colors.grey[200],
+              borderRadius: BorderRadius.circular(8.0),
+              border: Border(
+                left: BorderSide(
+                  color: Colors.blue,
+                  width: 3.0,
+                ),
+              ),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Replying to ${usernameResolver?.call(replyingTo!.sender.split('@')[0]) ?? replyingTo!.sender.split('@')[0]}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12.0,
+                          color: Colors.blue,
+                        ),
+                      ),
+                      const SizedBox(height: 4.0),
+                      Text(
+                        replyingTo!.content.isNotEmpty 
+                            ? (replyingTo!.content.length > 50 
+                                ? '${replyingTo!.content.substring(0, 50)}...' 
+                                : replyingTo!.content)
+                            : replyingTo!.fileUrl.isNotEmpty 
+                                ? 'File' 
+                                : 'Message',
+                        style: const TextStyle(fontSize: 14.0),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: onCancelReply,
+                ),
+              ],
+            ),
+          ),
         if (selectedFiles.isNotEmpty)
           buildFilesPreview(selectedFiles, onRemoveFile),
         Row(
@@ -240,32 +486,65 @@ Widget buildGroupPopupMenu({
   required VoidCallback onDismiss,
   required Offset position,
   required bool isMe,
+  VoidCallback? onReply,
+  VoidCallback? onDelete,
 }) {
   return Positioned(
     left: position.dx,
     top: position.dy,
     child: Material(
       elevation: 4,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: const Icon(Icons.copy),
-            title: const Text('Copy'),
-            onTap: onCopy,
+      child: Container(
+        constraints: const BoxConstraints(
+          minWidth: 150,
+          maxWidth: 200,
+        ),
+        child: IntrinsicWidth(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.copy, size: 20),
+                title: const Text('Copy', style: TextStyle(fontSize: 14)),
+                onTap: onCopy,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              ),
+              if (onReply != null)
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.reply, size: 20),
+                  title: const Text('Reply', style: TextStyle(fontSize: 14)),
+                  onTap: onReply,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                ),
+              if (isMe)
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.edit, size: 20),
+                  title: const Text('Edit', style: TextStyle(fontSize: 14)),
+                  onTap: onEdit,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                ),
+              if (onDelete != null)
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.delete, size: 20),
+                  title: const Text('Delete', style: TextStyle(fontSize: 14)),
+                  onTap: onDelete,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                ),
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.close, size: 20),
+                title: const Text('Dismiss', style: TextStyle(fontSize: 14)),
+                onTap: onDismiss,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              ),
+            ],
           ),
-          if (isMe)
-            ListTile(
-              leading: const Icon(Icons.edit),
-              title: const Text('Edit'),
-              onTap: onEdit,
-            ),
-          ListTile(
-            leading: const Icon(Icons.close),
-            title: const Text('Dismiss'),
-            onTap: onDismiss,
-          ),
-        ],
+        ),
       ),
     ),
   );

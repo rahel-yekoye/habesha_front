@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+
 import 'package:video_player/video_player.dart';
 import '../../models/message.dart' as models;
 import 'package:audioplayers/audioplayers.dart' as ap;
@@ -50,6 +51,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   String? _editingMessageId;
   final TextEditingController _editController = TextEditingController();
   Offset? _popupPosition;
+  models.Message? _replyingTo;
 
   @override
   void initState() {
@@ -57,11 +59,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     GroupSocketHandlers.initializeSocket(
       context: context,
       widget: widget,
-      onMessagesUpdate: (msgs) => setState(() {
-        messages = msgs;
-        // Always scroll after messages update
-        _scrollToBottomSmooth();
-      }),
+      onMessagesUpdate: (msgs) {
+        print('🎯 onMessagesUpdate called with ${msgs.length} messages');
+        setState(() {
+          print('🔄 setState executing - updating messages from ${messages.length} to ${msgs.length}');
+          messages = msgs;
+          // Always scroll after messages update
+          _scrollToBottomSmooth();
+        });
+        print('✅ setState completed');
+      },
       onJoinedGroup: (joined) => setState(() => _joinedGroup = joined),
       onSocket: (s) => socket = s,
       onScrollToBottom: _scrollToBottomSmooth,
@@ -108,12 +115,16 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
     _scrollToBottomSmooth();
   }
 
-  String _getUsername(String userId) {
-    final user = allUsers.firstWhere(
-      (u) => u['_id'] == userId,
-      orElse: () => {'username': userId},
-    );
-    return user['username'] ?? userId;
+  String _getUsername(String sender) {
+    return sender.split('@')[0];
+  }
+
+  models.Message? _getMessageById(String messageId) {
+    try {
+      return messages.firstWhere((msg) => msg.id == messageId);
+    } catch (e) {
+      return null;
+    }
   }
 
   Future<List<PlatformFile>?> _pickAndAddFiles() async {
@@ -152,6 +163,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
   Widget build(BuildContext context) {
     List<models.Message> filteredMessages =
         messages.where((msg) => !msg.deleted).toList();
+    print('🎨 Building UI with ${messages.length} total messages, ${filteredMessages.length} filtered messages');
 
     return Scaffold(
       appBar: buildGroupAppBar(
@@ -189,64 +201,116 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                     Expanded(
                       child: filteredMessages.isEmpty
                           ? const Center(child: Text('No messages yet'))
-                          : ListView.builder(
-                              controller: _scrollController,
-                              itemCount: filteredMessages.length,
-                              itemBuilder: (context, index) {
-                                return GroupMessageBubble(
-                                  message: filteredMessages[index],
-                                  isSender: filteredMessages[index].sender == widget.currentUser,
-                                  isSelected: _selectedMessageIndices.contains(index),
-                                  usernameResolver: _getUsername,
-                                  editingMessageId: _editingMessageId,
-                                  editController: _editController,
-                                  onLongPress: (details) => GroupMessageActions.handleLongPress(
-                                    context: context,
-                                    index: index,
-                                    details: details,
-                                    onSelectionMode: (mode) => setState(() => _isSelectionMode = mode),
-                                    onUpdateSelection: (indices) => setState(() => _selectedMessageIndices = indices),
-                                    onPopupPosition: (pos) => setState(() => _popupPosition = pos),
-                                  ),
-                                  onTap: () => GroupMessageActions.handleTap(
-                                    context: context,
-                                    index: index,
-                                    selectedIndices: _selectedMessageIndices,
-                                    onUpdateSelection: (indices) => setState(() => _selectedMessageIndices = indices),
-                                    onSelectionMode: (mode) => setState(() => _isSelectionMode = mode),
-                                    onPopupPosition: (pos) => setState(() => _popupPosition = pos),
-                                  ),
-                                  onEdit: (newText) async {
-                                    if (newText.isNotEmpty) {
-                                      await GroupMessageActions.editMessage(
-                                        context: context,
-                                        messageId: filteredMessages[index].id,
-                                        newContent: newText,
-                                        groupId: widget.groupId,
-                                        jwtToken: widget.jwtToken,
-                                        socket: socket,
-                                        onUpdateMessages: (msgs) => setState(() => messages = msgs),
-                                      );
-                                      setState(() {
-                                        _editingMessageId = null;
-                                        _editController.clear();
-                                      });
+                          : LayoutBuilder(
+                              builder: (context, constraints) {
+                                if (constraints.maxHeight <= 0 || constraints.maxWidth <= 0) {
+                                  return const SizedBox.shrink();
+                                }
+                                return ListView.separated(
+                                  controller: _scrollController,
+                                  physics: const BouncingScrollPhysics(),
+                                  padding: const EdgeInsets.all(8),
+                                  itemCount: filteredMessages.length,
+                                  separatorBuilder: (context, index) => const SizedBox(height: 4),
+                                  itemBuilder: (context, index) {
+                                    if (index < 0 || index >= filteredMessages.length) {
+                                      return const SizedBox.shrink();
                                     }
-                                  },
-                                  onDelete: () async {
-                                    await GroupMessageActions.deleteMessagesWithUndo(
-                                      context: context,
-                                      selectedIndices: {index},
-                                      messages: messages,
-                                      onUpdateMessages: (msgs) => setState(() => messages = msgs),
-                                      onDeleteConfirmed: (ids) => setState(() {
-                                        messages.removeWhere((m) => ids.contains(m.id));
-                                        _selectedMessageIndices.clear();
-                                        _isSelectionMode = false;
-                                      }),
-                                      groupId: widget.groupId,
-                                      jwtToken: widget.jwtToken,
-                                      socket: socket,
+                                    
+                                    final message = filteredMessages[index];
+                                    return RepaintBoundary(
+                                      key: ValueKey('repaint_${message.id}_$index'),
+                                      child: GroupMessageBubble(
+                                        key: ValueKey('msg_${message.id}_$index'),
+                                        message: message,
+                                        isSender: message.sender == widget.currentUser,
+                                        isSelected: _selectedMessageIndices.contains(index),
+                                        usernameResolver: _getUsername,
+                                        editingMessageId: _editingMessageId,
+                                        editController: _editController,
+                                        getMessageById: _getMessageById,
+                                        onLongPress: (details) {
+                                          if (mounted) {
+                                            GroupMessageActions.handleLongPress(
+                                              context: context,
+                                              index: index,
+                                              details: details,
+                                              onSelectionMode: (mode) {
+                                                if (mounted) setState(() => _isSelectionMode = mode);
+                                              },
+                                              onUpdateSelection: (indices) {
+                                                if (mounted) setState(() => _selectedMessageIndices = indices);
+                                              },
+                                              onPopupPosition: (pos) {
+                                                if (mounted) setState(() => _popupPosition = pos);
+                                              },
+                                            );
+                                          }
+                                        },
+                                        onTap: () {
+                                          if (mounted) {
+                                            GroupMessageActions.handleTap(
+                                              context: context,
+                                              index: index,
+                                              selectedIndices: _selectedMessageIndices,
+                                              onUpdateSelection: (indices) {
+                                                if (mounted) setState(() => _selectedMessageIndices = indices);
+                                              },
+                                              onSelectionMode: (mode) {
+                                                if (mounted) setState(() => _isSelectionMode = mode);
+                                              },
+                                              onPopupPosition: (pos) {
+                                                if (mounted) setState(() => _popupPosition = pos);
+                                              },
+                                            );
+                                          }
+                                        },
+                                        onEdit: (newText) async {
+                                          if (newText.isNotEmpty && mounted) {
+                                            await GroupMessageActions.editMessage(
+                                              context: context,
+                                              messageId: message.id,
+                                              newContent: newText,
+                                              groupId: widget.groupId,
+                                              jwtToken: widget.jwtToken,
+                                              socket: socket,
+                                              onUpdateMessages: (msgs) {
+                                                if (mounted) setState(() => messages = msgs);
+                                              },
+                                            );
+                                            if (mounted) {
+                                              setState(() {
+                                                _editingMessageId = null;
+                                                _editController.clear();
+                                              });
+                                            }
+                                          }
+                                        },
+                                        onDelete: () async {
+                                          if (mounted) {
+                                            await GroupMessageActions.deleteMessagesWithUndo(
+                                              context: context,
+                                              selectedIndices: {index},
+                                              messages: messages,
+                                              onUpdateMessages: (msgs) {
+                                                if (mounted) setState(() => messages = msgs);
+                                              },
+                                              onDeleteConfirmed: (ids) {
+                                                if (mounted) {
+                                                  setState(() {
+                                                    messages.removeWhere((m) => ids.contains(m.id));
+                                                    _selectedMessageIndices.clear();
+                                                    _isSelectionMode = false;
+                                                  });
+                                                }
+                                              },
+                                              groupId: widget.groupId,
+                                              jwtToken: widget.jwtToken,
+                                              socket: socket,
+                                            );
+                                          }
+                                        },
+                                      ),
                                     );
                                   },
                                 );
@@ -258,12 +322,14 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       focusNode: _focusNode,
                       showEmojiPicker: _showEmojiPicker,
                       selectedFiles: _selectedFiles,
+                      replyingTo: _replyingTo,
+                      usernameResolver: _getUsername,
                       onEmojiToggle: () {
                         _focusNode.unfocus();
                         setState(() => _showEmojiPicker = !_showEmojiPicker);
                       },
-                        canSend: _joinedGroup && (socket?.connected ?? false),
-
+                      canSend: _joinedGroup && (socket?.connected ?? false),
+                      onCancelReply: () => setState(() => _replyingTo = null),
                       onSend: () => GroupSocketHandlers.sendMessage(
                         context: context,
                         socket: socket,
@@ -274,7 +340,9 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                         onUpdateMessages: (msgs) => setState(() => messages = msgs),
                         onClearFiles: () => setState(() => _selectedFiles.clear()),
                         onScrollToBottom: _scrollToBottomSmooth,
-                        currentMessages: messages, // <-- Add this line!
+                        currentMessages: messages,
+                        replyingTo: _replyingTo,
+                        onClearReply: () => setState(() => _replyingTo = null),
                       ),
                       pickFiles: _pickAndAddFiles,
                       onRemoveFile: (index) => setState(() => _selectedFiles.removeAt(index)),
@@ -297,9 +365,39 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
                       _editController.text = filteredMessages[_selectedMessageIndices.first].content;
                       _dismissPopup();
                     }),
+                    onReply: () => GroupMessageActions.replyToMessage(
+                      context: context,
+                      message: filteredMessages[_selectedMessageIndices.first],
+                      onSetReplyingTo: (msg) => setState(() => _replyingTo = msg),
+                      onDismiss: _dismissPopup,
+                    ),
+                    onDelete: () => GroupMessageActions.deleteSingleMessage(
+                      context: context,
+                      message: filteredMessages[_selectedMessageIndices.first],
+                      messageIndex: _selectedMessageIndices.first,
+                      messages: messages,
+                      onUpdateMessages: (msgs) => setState(() => messages = msgs),
+                      onDeleteConfirmed: (ids) => setState(() {
+                        messages.removeWhere((m) => ids.contains(m.id));
+                        _selectedMessageIndices.clear();
+                        _isSelectionMode = false;
+                      }),
+                      groupId: widget.groupId,
+                      jwtToken: widget.jwtToken,
+                      socket: socket,
+                      onDismiss: _dismissPopup,
+                    ),
                     onDismiss: _dismissPopup,
                     position: _popupPosition!,
-                    isMe: filteredMessages[_selectedMessageIndices.first].sender == widget.currentUser,
+                    isMe: () {
+                      final message = filteredMessages[_selectedMessageIndices.first];
+                      final isMe = message.sender == widget.currentUser;
+                      print('🔍 Popup menu isMe check:');
+                      print('  - Message sender: "${message.sender}"');
+                      print('  - Current user: "${widget.currentUser}"');
+                      print('  - Is me: $isMe');
+                      return isMe;
+                    }(),
                   ),
               ],
             ),
@@ -327,6 +425,7 @@ class _GroupChatScreenState extends State<GroupChatScreen> {
       },
     );
   }
+
 }
 
 // Re-using InlineVideoPlayer and InlineAudioPlayer from chatapp.txt

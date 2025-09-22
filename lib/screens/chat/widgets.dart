@@ -723,48 +723,99 @@ class InlineAudioPlayer extends StatefulWidget {
 class _InlineAudioPlayerState extends State<InlineAudioPlayer> {
   final ap.AudioPlayer _audioPlayer = ap.AudioPlayer();
   bool _isPlaying = false;
+  bool _hasError = false;
+  bool _isLoading = true;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
+  String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
+    _setupAudioListeners();
+    _initAudio();
+  }
 
+  void _setupAudioListeners() {
     _audioPlayer.onPlayerStateChanged.listen((state) {
-         if (!mounted) return;
+      if (!mounted) return;
       setState(() {
         _isPlaying = state == ap.PlayerState.playing;
       });
     });
 
     _audioPlayer.onDurationChanged.listen((d) {
-        if (!mounted) return;
+      if (!mounted) return;
       setState(() {
         _duration = d;
+        _isLoading = false;
       });
     });
 
     _audioPlayer.onPositionChanged.listen((p) {
-         if (!mounted) return;
+      if (!mounted) return;
       setState(() {
         _position = p;
       });
     });
-  _initAudio();
   }
-Future<void> _initAudio() async {
-  try {
-    await _audioPlayer
-        .setSourceUrl(widget.url)
-        .timeout(const Duration(seconds: 10));
-  } catch (e) {
-    print('❌ Failed to load audio from ${widget.url}: $e');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Audio failed to load')),
-      );
+
+  Future<void> _initAudio() async {
+    try {
+      // Validate audio URL and format
+      if (!_isValidAudioUrl(widget.url)) {
+        throw Exception('Unsupported audio format or invalid URL');
+      }
+
+      // Set audio source with timeout
+      await _audioPlayer
+          .setSourceUrl(widget.url)
+          .timeout(const Duration(seconds: 15));
+      
+      if (mounted) {
+        setState(() {
+          _hasError = false;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      print('❌ Failed to load audio from ${widget.url}: $e');
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+          _isLoading = false;
+          _errorMessage = _getErrorMessage(e.toString());
+        });
+      }
     }
-  }  }
+  }
+
+  bool _isValidAudioUrl(String url) {
+    try {
+      final uri = Uri.parse(url);
+      if (!uri.hasScheme || (!uri.scheme.startsWith('http') && !uri.scheme.startsWith('https'))) {
+        return false;
+      }
+      
+      final supportedFormats = ['mp3', 'wav', 'ogg', 'aac', 'm4a', 'webm'];
+      final extension = uri.path.split('.').last.toLowerCase();
+      return supportedFormats.contains(extension);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  String _getErrorMessage(String error) {
+    if (error.contains('Format error') || error.contains('MEDIA_ELEMENT_ERROR')) {
+      return 'Unsupported audio format';
+    } else if (error.contains('TimeoutException')) {
+      return 'Audio loading timeout';
+    } else if (error.contains('NetworkException')) {
+      return 'Network error loading audio';
+    } else {
+      return 'Failed to load audio';
+    }
+  }
 
   @override
   void dispose() {
@@ -774,33 +825,151 @@ Future<void> _initAudio() async {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Slider(
-          min: 0,
-          max: _duration.inMilliseconds.toDouble(),
-          value: _position.inMilliseconds.clamp(0, _duration.inMilliseconds).toDouble(),
-          onChanged: (value) {
-            _audioPlayer.seek(Duration(milliseconds: value.toInt()));
-          },
+    if (_hasError) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.red[50],
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.red[200]!),
         ),
-        Row(
+        child: Row(
           children: [
+            Icon(Icons.error_outline, color: Colors.red[600], size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Audio Error',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.red[800],
+                      fontSize: 12,
+                    ),
+                  ),
+                  Text(
+                    _errorMessage ?? 'Failed to load audio',
+                    style: TextStyle(
+                      color: Colors.red[700],
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
+            ),
             IconButton(
-              icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+              icon: Icon(Icons.refresh, size: 18, color: Colors.red[600]),
               onPressed: () {
-                if (_isPlaying) {
-                  _audioPlayer.pause();
-                } else {
-                  _audioPlayer.resume();
-                }
+                setState(() {
+                  _hasError = false;
+                  _isLoading = true;
+                });
+                _initAudio();
               },
             ),
-            Text('${_position.inSeconds}/${_duration.inSeconds} sec'),
           ],
         ),
-      ],
+      );
+    }
+
+    if (_isLoading) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 12),
+            const Text('Loading audio...', style: TextStyle(fontSize: 12)),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                icon: Icon(
+                  _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                  size: 32,
+                  color: Colors.blue[600],
+                ),
+                onPressed: _duration.inMilliseconds > 0 ? () async {
+                  try {
+                    if (_isPlaying) {
+                      await _audioPlayer.pause();
+                    } else {
+                      await _audioPlayer.resume();
+                    }
+                  } catch (e) {
+                    print('Audio playback error: $e');
+                  }
+                } : null,
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Slider(
+                      min: 0,
+                      max: _duration.inMilliseconds.toDouble(),
+                      value: _position.inMilliseconds.clamp(0, _duration.inMilliseconds).toDouble(),
+                      onChanged: _duration.inMilliseconds > 0 ? (value) async {
+                        try {
+                          await _audioPlayer.seek(Duration(milliseconds: value.toInt()));
+                        } catch (e) {
+                          print('Audio seek error: $e');
+                        }
+                      } : null,
+                      activeColor: Colors.blue[600],
+                      inactiveColor: Colors.grey[300],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            _formatDuration(_position),
+                            style: const TextStyle(fontSize: 11, color: Colors.black54),
+                          ),
+                          Text(
+                            _formatDuration(_duration),
+                            style: const TextStyle(fontSize: 11, color: Colors.black54),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return '$minutes:$seconds';
   }
 }
 

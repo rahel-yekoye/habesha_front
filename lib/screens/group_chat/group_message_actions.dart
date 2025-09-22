@@ -15,8 +15,12 @@ class GroupMessageActions {
     required Function(List<models.Message>) onUpdateMessages,
   }) async {
     try {
-      // Optimistic update: handled by socket event
+      print('✏️ Attempting to edit message: $messageId in group: $groupId');
+      print('📝 New content: $newContent');
+      
       final url = Uri.parse('http://localhost:4000/groups/$groupId/messages/$messageId');
+      print('🌐 PUT URL: $url');
+      
       final response = await http.put(
         url,
         headers: {
@@ -25,18 +29,26 @@ class GroupMessageActions {
         },
         body: '{"content": "$newContent"}',
       );
+      
+      print('📡 PUT Response: ${response.statusCode} - ${response.body}');
+      
       if (response.statusCode == 200) {
+        print('✅ Message edited successfully, emitting socket event');
         socket?.emit('group_message_edited', {
           'messageId': messageId,
           'newContent': newContent,
           'groupId': groupId,
         });
       } else {
+        print('❌ Edit failed with status: ${response.statusCode}');
+        print('❌ Response body: ${response.body}');
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to edit message')),
+          SnackBar(content: Text('Failed to edit message: ${response.statusCode}')),
         );
       }
     } catch (e) {
+      print('❌ Failed to edit group message: $e');
+      print('❌ Error type: ${e.runtimeType}');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Edit error: $e')),
       );
@@ -102,19 +114,30 @@ class GroupMessageActions {
   }) async {
     for (final msgId in messageIds) {
       try {
+        print('🗑️ Attempting to delete message: $msgId from group: $groupId');
         final url = Uri.parse('http://localhost:4000/groups/$groupId/messages/$msgId');
+        print('🌐 DELETE URL: $url');
+        
         final response = await http.delete(
           url,
-          headers: {'Authorization': 'Bearer $jwtToken'},
+          headers: {
+            'Authorization': 'Bearer $jwtToken',
+            'Content-Type': 'application/json',
+          },
         );
+        
+        print('📡 DELETE Response: ${response.statusCode} - ${response.body}');
+        
         if (response.statusCode == 200) {
-          socket?.emit('group_message_deleted', {
-            'messageId': msgId,
-            'groupId': groupId,
-          });
+          print('✅ Message deleted successfully');
+          // Backend will emit the socket event, no need to emit from frontend
+        } else {
+          print('❌ Delete failed with status: ${response.statusCode}');
+          print('❌ Response body: ${response.body}');
         }
       } catch (e) {
-        print('Failed to delete group message: $e');
+        print('❌ Failed to delete group message: $e');
+        print('❌ Error type: ${e.runtimeType}');
       }
     }
   }
@@ -166,5 +189,48 @@ class GroupMessageActions {
     onSelectionMode(true);
     onUpdateSelection({index});
     onPopupPosition(details.globalPosition);
+  }
+
+  /// Reply to a message
+  static void replyToMessage({
+    required BuildContext context,
+    required models.Message message,
+    required Function(models.Message?) onSetReplyingTo,
+    required VoidCallback onDismiss,
+  }) {
+    onSetReplyingTo(message);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Replying to ${message.sender.split('@')[0]}'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    onDismiss();
+  }
+
+  /// Delete a single message
+  static Future<void> deleteSingleMessage({
+    required BuildContext context,
+    required models.Message message,
+    required int messageIndex,
+    required List<models.Message> messages,
+    required Function(List<models.Message>) onUpdateMessages,
+    required Function(List<String>) onDeleteConfirmed,
+    required String groupId,
+    required String jwtToken,
+    required dynamic socket,
+    required VoidCallback onDismiss,
+  }) async {
+    onDismiss();
+    await deleteMessagesWithUndo(
+      context: context,
+      selectedIndices: {messageIndex},
+      messages: messages,
+      onUpdateMessages: onUpdateMessages,
+      onDeleteConfirmed: onDeleteConfirmed,
+      groupId: groupId,
+      jwtToken: jwtToken,
+      socket: socket,
+    );
   }
 }

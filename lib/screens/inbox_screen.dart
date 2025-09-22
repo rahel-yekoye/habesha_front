@@ -14,6 +14,7 @@ import 'search_user_screen.dart';
 import 'profile_screen.dart';
 import 'contacts_screen.dart';
 import 'settings_screen.dart';
+import 'group_chat/group_chat_screen.dart';
 
 class InboxScreen extends StatefulWidget {
   final String currentUser;
@@ -502,8 +503,17 @@ class _InboxScreenState extends State<InboxScreen>
                       overflow: TextOverflow.ellipsis,
                     ),
                     onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Group chat feature coming soon')),
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => GroupChatScreen(
+                            groupId: group['_id'],
+                            groupName: group['name'],
+                            groupDescription: group['description'] ?? '',
+                            currentUser: widget.currentUser,
+                            jwtToken: widget.jwtToken,
+                          ),
+                        ),
                       );
                     },
                   );
